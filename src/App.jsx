@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { io } from 'socket.io-client'
 import dayjs from 'dayjs'
@@ -17,9 +17,9 @@ function Login({ onLoggedIn }) {
       if (isRegister) {
         await axios.post(`${API}/auth/register`, { name, username, password }, { withCredentials: true })
       }
-      await axios.post(`${API}/auth/login`, { username, password }, { withCredentials: true })
+      const loginRes = await axios.post(`${API}/auth/login`, { username, password }, { withCredentials: true })
       const me = await axios.get(`${API}/auth/me`, { withCredentials: true })
-      onLoggedIn(me.data)
+      onLoggedIn({ user: me.data, token: loginRes.data?.token })
     } catch (e) {
       alert(e.response?.data?.detail || 'Auth error')
     }
@@ -80,20 +80,20 @@ function Chat() {
     setMessages(res.data)
   }
 
-  const ensureSocket = async (token) => {
-    const s = io(API, { auth: { token }, transports: ['websocket'] })
+  const ensureSocket = async () => {
+    // Rely on cookie-based auth. Server reads cookie in connect handler.
+    const s = io(API, { transports: ['websocket'], withCredentials: true })
     s.on('connect', () => {})
     s.on('message:new', (msg) => {
       if (msg.conversationId === activeId) setMessages(m => [...m, msg])
-      // refresh chat list
       loadConversations()
     })
     s.on('typing', ({ conversationId, userId, isTyping }) => {
       if (conversationId !== activeId) return
       setTypingMap(m => ({ ...m, [userId]: isTyping }))
     })
-    s.on('presence:online', ({ userId }) => {})
-    s.on('presence:offline', ({ userId }) => {})
+    s.on('presence:online', () => {})
+    s.on('presence:offline', () => {})
     setSocket(s)
     return s
   }
@@ -103,10 +103,7 @@ function Chat() {
       try {
         await loadMe()
         await loadConversations()
-        // fetch token by doing login again? backend returns token on login, but here we don't have it.
-        // Provide a helper endpoint? We will call /auth/me to verify then request cookie token via document.cookie is httpOnly, so we pass token via header on socket connect not possible. So update backend login to also return token.
-        const token = (await axios.post(`${API}/auth/login`, { username: 'dummy', password: 'dummy' }).catch(()=>({data:{token:null}}))).data.token
-        const s = await ensureSocket(token || new URLSearchParams(document.cookie).get('token'))
+        await ensureSocket()
       } catch (e) {
         // not logged in
       }
@@ -142,7 +139,7 @@ function Chat() {
     setSearchResults([])
   }
 
-  if (!me) return <Login onLoggedIn={(u)=>{ setMe(u); loadConversations() }} />
+  if (!me) return <Login onLoggedIn={async ({ user })=>{ setMe(user); await loadConversations(); await ensureSocket(); }} />
 
   return (
     <div className="h-screen grid grid-cols-[360px,1fr] bg-slate-900 text-slate-100">
