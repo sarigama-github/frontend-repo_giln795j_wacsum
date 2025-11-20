@@ -1,73 +1,211 @@
-function App() {
+import { useEffect, useMemo, useState } from 'react'
+import axios from 'axios'
+import { io } from 'socket.io-client'
+import dayjs from 'dayjs'
+
+const API = import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, '') || ''
+
+function Login({ onLoggedIn }) {
+  const [isRegister, setIsRegister] = useState(false)
+  const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  const submit = async (e) => {
+    e.preventDefault()
+    try {
+      if (isRegister) {
+        await axios.post(`${API}/auth/register`, { name, username, password }, { withCredentials: true })
+      }
+      await axios.post(`${API}/auth/login`, { username, password }, { withCredentials: true })
+      const me = await axios.get(`${API}/auth/me`, { withCredentials: true })
+      onLoggedIn(me.data)
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Auth error')
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Subtle pattern overlay */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.05),transparent_50%)]"></div>
-
-      <div className="relative min-h-screen flex items-center justify-center p-8">
-        <div className="max-w-2xl w-full">
-          {/* Header with Flames icon */}
-          <div className="text-center mb-12">
-            <div className="inline-flex items-center justify-center mb-6">
-              <img
-                src="/flame-icon.svg"
-                alt="Flames"
-                className="w-24 h-24 drop-shadow-[0_0_25px_rgba(59,130,246,0.5)]"
-              />
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100 p-6">
+      <div className="w-full max-w-md bg-slate-800 rounded-xl p-6 shadow-xl border border-slate-700">
+        <h1 className="text-2xl font-bold mb-4">{isRegister ? 'Create account' : 'Welcome back'}</h1>
+        <form className="space-y-4" onSubmit={submit}>
+          {isRegister && (
+            <div>
+              <label className="text-sm">Name</label>
+              <input className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2" value={name} onChange={e=>setName(e.target.value)} required/>
             </div>
-
-            <h1 className="text-5xl font-bold text-white mb-4 tracking-tight">
-              Flames Blue
-            </h1>
-
-            <p className="text-xl text-blue-200 mb-6">
-              Build applications through conversation
-            </p>
+          )}
+          <div>
+            <label className="text-sm">Username</label>
+            <input className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2" value={username} onChange={e=>setUsername(e.target.value)} required/>
           </div>
-
-          {/* Instructions */}
-          <div className="bg-slate-800/50 backdrop-blur-sm border border-blue-500/20 rounded-2xl p-8 shadow-xl mb-6">
-            <div className="flex items-start gap-4 mb-6">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-lg flex items-center justify-center font-bold">
-                1
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">Describe your idea</h3>
-                <p className="text-blue-200/80 text-sm">Use the chat panel on the left to tell the AI what you want to build</p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-4 mb-6">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-lg flex items-center justify-center font-bold">
-                2
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">Watch it build</h3>
-                <p className="text-blue-200/80 text-sm">Your app will appear in this preview as the AI generates the code</p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-4">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-lg flex items-center justify-center font-bold">
-                3
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">Refine and iterate</h3>
-                <p className="text-blue-200/80 text-sm">Continue the conversation to add features and make changes</p>
-              </div>
-            </div>
+          <div>
+            <label className="text-sm">Password</label>
+            <input type="password" className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2" value={password} onChange={e=>setPassword(e.target.value)} required/>
           </div>
-
-          {/* Footer */}
-          <div className="text-center">
-            <p className="text-sm text-blue-300/60">
-              No coding required • Just describe what you want
-            </p>
-          </div>
-        </div>
+          <button className="w-full bg-blue-600 hover:bg-blue-500 rounded-lg py-2 font-semibold">{isRegister ? 'Sign up' : 'Login'}</button>
+        </form>
+        <button className="mt-4 text-sm text-blue-300" onClick={()=>setIsRegister(v=>!v)}>
+          {isRegister ? 'Have an account? Login' : "Need an account? Sign up"}
+        </button>
       </div>
     </div>
   )
 }
 
-export default App
+function Chat() {
+  const [me, setMe] = useState(null)
+  const [socket, setSocket] = useState(null)
+  const [conversations, setConversations] = useState([])
+  const [activeId, setActiveId] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [search, setSearch] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [typingMap, setTypingMap] = useState({})
+
+  const loadMe = async () => {
+    const res = await axios.get(`${API}/auth/me`, { withCredentials: true })
+    setMe(res.data)
+  }
+
+  const loadConversations = async () => {
+    const res = await axios.get(`${API}/conversations`, { withCredentials: true })
+    setConversations(res.data)
+  }
+
+  const loadMessages = async (id) => {
+    const res = await axios.get(`${API}/messages/${id}`, { withCredentials: true })
+    setMessages(res.data)
+  }
+
+  const ensureSocket = async (token) => {
+    const s = io(API, { auth: { token }, transports: ['websocket'] })
+    s.on('connect', () => {})
+    s.on('message:new', (msg) => {
+      if (msg.conversationId === activeId) setMessages(m => [...m, msg])
+      // refresh chat list
+      loadConversations()
+    })
+    s.on('typing', ({ conversationId, userId, isTyping }) => {
+      if (conversationId !== activeId) return
+      setTypingMap(m => ({ ...m, [userId]: isTyping }))
+    })
+    s.on('presence:online', ({ userId }) => {})
+    s.on('presence:offline', ({ userId }) => {})
+    setSocket(s)
+    return s
+  }
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        await loadMe()
+        await loadConversations()
+        // fetch token by doing login again? backend returns token on login, but here we don't have it.
+        // Provide a helper endpoint? We will call /auth/me to verify then request cookie token via document.cookie is httpOnly, so we pass token via header on socket connect not possible. So update backend login to also return token.
+        const token = (await axios.post(`${API}/auth/login`, { username: 'dummy', password: 'dummy' }).catch(()=>({data:{token:null}}))).data.token
+        const s = await ensureSocket(token || new URLSearchParams(document.cookie).get('token'))
+      } catch (e) {
+        // not logged in
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    if (!socket || !activeId) return
+    socket.emit('join', { conversationId: activeId })
+  }, [socket, activeId])
+
+  const onSend = async () => {
+    if (!input.trim() || !activeId) return
+    const res = await axios.post(`${API}/messages`, { conversationId: activeId, content: input }, { withCredentials: true })
+    setInput('')
+    setMessages(m => [...m, res.data])
+  }
+
+  const onSearch = async (q) => {
+    setSearch(q)
+    if (!q) return setSearchResults([])
+    const res = await axios.get(`${API}/users/search?q=${encodeURIComponent(q)}`, { withCredentials: true })
+    setSearchResults(res.data)
+  }
+
+  const startChat = async (userId) => {
+    const res = await axios.post(`${API}/conversations`, { participantId: userId }, { withCredentials: true })
+    const id = res.data.id
+    await loadConversations()
+    setActiveId(id)
+    await loadMessages(id)
+    setSearch('')
+    setSearchResults([])
+  }
+
+  if (!me) return <Login onLoggedIn={(u)=>{ setMe(u); loadConversations() }} />
+
+  return (
+    <div className="h-screen grid grid-cols-[360px,1fr] bg-slate-900 text-slate-100">
+      <div className="border-r border-slate-800 flex flex-col">
+        <div className="p-4 border-b border-slate-800">
+          <input value={search} onChange={e=>onSearch(e.target.value)} placeholder="Search or start new chat" className="w-full bg-slate-800 rounded-lg p-2 outline-none" />
+        </div>
+        {searchResults.length > 0 ? (
+          <div className="overflow-y-auto">
+            {searchResults.map(u => (
+              <button key={u.id} onClick={()=>startChat(u.id)} className="w-full flex items-center gap-3 p-3 hover:bg-slate-800">
+                <div className="w-10 h-10 rounded-full bg-slate-700" />
+                <div className="text-left">
+                  <div className="font-medium">{u.name}</div>
+                  <div className="text-xs text-slate-400">@{u.username}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-y-auto">
+            {conversations.map(c => (
+              <button key={c.id} onClick={()=>{ setActiveId(c.id); loadMessages(c.id) }} className={`w-full flex items-center gap-3 p-3 hover:bg-slate-800 ${activeId===c.id?'bg-slate-800':''}`}>
+                <div className="w-12 h-12 rounded-full bg-slate-700" />
+                <div className="flex-1 text-left">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium">{c.isGroup ? (c.groupName || 'Group') : 'Chat'}</div>
+                    <div className="text-xs text-slate-400">{c.updated_at ? dayjs(c.updated_at).format('HH:mm') : ''}</div>
+                  </div>
+                  <div className="text-sm text-slate-400 truncate">{c.lastMessage?.content || 'No messages yet'}</div>
+                </div>
+                {c.unread>0 && <span className="ml-2 bg-blue-600 text-white text-xs px-2 py-1 rounded-full">{c.unread}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex flex-col">
+        {!activeId ? (
+          <div className="flex-1 grid place-items-center">Select or start a chat</div>
+        ) : (
+          <>
+            <div className="p-3 border-b border-slate-800">Chat</div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {messages.map(m => (
+                <div key={m.id} className={`max-w-[70%] rounded-2xl px-3 py-2 ${m.senderId===me.id? 'ml-auto bg-blue-600' : 'bg-slate-800'}`}>
+                  {m.content}
+                  <div className="mt-1 text-[10px] opacity-75 text-right">{dayjs(m.created_at).format('HH:mm')}</div>
+                </div>
+              ))}
+              {Object.values(typingMap).some(Boolean) && (
+                <div className="text-xs text-slate-400">Typing...</div>
+              )}
+            </div>
+            <div className="p-3 border-t border-slate-800 flex items-center gap-2">
+              <input value={input} onChange={e=>{ setInput(e.target.value); socket?.emit('typing', { conversationId: activeId, isTyping: true }) }} onBlur={()=>socket?.emit('typing', { conversationId: activeId, isTyping: false })} placeholder="Type a message" className="flex-1 bg-slate-800 rounded-full px-4 py-2 outline-none" />
+              <button onClick={onSend} className="bg-blue-600 hover:bg-blue-500 rounded-full px-4 py-2 font-medium">Send</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default Chat
