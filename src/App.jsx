@@ -18,8 +18,18 @@ function Login({ onLoggedIn }) {
         await axios.post(`${API}/auth/register`, { name, username, password }, { withCredentials: true })
       }
       const loginRes = await axios.post(`${API}/auth/login`, { username, password }, { withCredentials: true })
-      const me = await axios.get(`${API}/auth/me`, { withCredentials: true })
-      onLoggedIn({ user: me.data, token: loginRes.data?.token })
+      const token = loginRes.data?.token
+      // Try to fetch profile using cookie first; if blocked (embedded/3rd-party), fall back to Bearer
+      let me
+      try {
+        const meRes = await axios.get(`${API}/auth/me`, { withCredentials: true })
+        me = meRes.data
+      } catch (_) {
+        if (!token) throw _
+        const meRes = await axios.get(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` }, withCredentials: true })
+        me = meRes.data
+      }
+      onLoggedIn({ user: me, token })
     } catch (e) {
       alert(e.response?.data?.detail || 'Auth error')
     }
@@ -56,6 +66,7 @@ function Login({ onLoggedIn }) {
 
 function Chat() {
   const [me, setMe] = useState(null)
+  const [token, setToken] = useState(() => localStorage.getItem('token') || null)
   const [socket, setSocket] = useState(null)
   const [conversations, setConversations] = useState([])
   const [activeId, setActiveId] = useState(null)
@@ -65,24 +76,34 @@ function Chat() {
   const [searchResults, setSearchResults] = useState([])
   const [typingMap, setTypingMap] = useState({})
 
+  const authHeaders = token ? { Authorization: `Bearer ${token}` } : {}
+
   const loadMe = async () => {
-    const res = await axios.get(`${API}/auth/me`, { withCredentials: true })
-    setMe(res.data)
+    // try cookie first, then bearer
+    try {
+      const res = await axios.get(`${API}/auth/me`, { withCredentials: true })
+      setMe(res.data)
+      return
+    } catch {}
+    if (token) {
+      const res = await axios.get(`${API}/auth/me`, { headers: authHeaders, withCredentials: true })
+      setMe(res.data)
+    }
   }
 
   const loadConversations = async () => {
-    const res = await axios.get(`${API}/conversations`, { withCredentials: true })
+    const res = await axios.get(`${API}/conversations`, { withCredentials: true, headers: authHeaders })
     setConversations(res.data)
   }
 
   const loadMessages = async (id) => {
-    const res = await axios.get(`${API}/messages/${id}`, { withCredentials: true })
+    const res = await axios.get(`${API}/messages/${id}`, { withCredentials: true, headers: authHeaders })
     setMessages(res.data)
   }
 
   const ensureSocket = async () => {
-    // Rely on cookie-based auth. Server reads cookie in connect handler.
-    const s = io(API, { transports: ['websocket'], withCredentials: true })
+    // Prefer cookie auth; include token via auth payload as fallback for 3rd-party cookie blocking
+    const s = io(API, { transports: ['websocket'], withCredentials: true, auth: token ? { token } : undefined })
     s.on('connect', () => {})
     s.on('message:new', (msg) => {
       if (msg.conversationId === activeId) setMessages(m => [...m, msg])
@@ -105,7 +126,7 @@ function Chat() {
         await loadConversations()
         await ensureSocket()
       } catch (e) {
-        // not logged in
+        // not logged in yet
       }
     })()
   }, [])
@@ -117,7 +138,7 @@ function Chat() {
 
   const onSend = async () => {
     if (!input.trim() || !activeId) return
-    const res = await axios.post(`${API}/messages`, { conversationId: activeId, content: input }, { withCredentials: true })
+    const res = await axios.post(`${API}/messages`, { conversationId: activeId, content: input }, { withCredentials: true, headers: authHeaders })
     setInput('')
     setMessages(m => [...m, res.data])
   }
@@ -125,12 +146,12 @@ function Chat() {
   const onSearch = async (q) => {
     setSearch(q)
     if (!q) return setSearchResults([])
-    const res = await axios.get(`${API}/users/search?q=${encodeURIComponent(q)}`, { withCredentials: true })
+    const res = await axios.get(`${API}/users/search?q=${encodeURIComponent(q)}`, { withCredentials: true, headers: authHeaders })
     setSearchResults(res.data)
   }
 
   const startChat = async (userId) => {
-    const res = await axios.post(`${API}/conversations`, { participantId: userId }, { withCredentials: true })
+    const res = await axios.post(`${API}/conversations`, { participantId: userId }, { withCredentials: true, headers: authHeaders })
     const id = res.data.id
     await loadConversations()
     setActiveId(id)
@@ -139,7 +160,7 @@ function Chat() {
     setSearchResults([])
   }
 
-  if (!me) return <Login onLoggedIn={async ({ user })=>{ setMe(user); await loadConversations(); await ensureSocket(); }} />
+  if (!me) return <Login onLoggedIn={async ({ user, token: t })=>{ setMe(user); if (t) { setToken(t); localStorage.setItem('token', t); } await loadConversations(); await ensureSocket(); }} />
 
   return (
     <div className="h-screen grid grid-cols-[360px,1fr] bg-slate-900 text-slate-100">
